@@ -11,7 +11,7 @@ class AST(object):
     __metaclass__ = abc.ABCMeta
 
     @staticmethod
-    def get_ast(ast_algorithm, strings_collection):
+    def get_ast(strings_collection, ast_algorithm="easa"):
         for ast_cls in utils.itersubclasses(AST):
             if not inspect.isabstract(ast_cls) and ast_algorithm == ast_cls.__algorithm__:
                 return ast_cls(strings_collection)
@@ -22,7 +22,7 @@ class AST(object):
             raise exceptions.EmptyStringsCollectionException()
 
     @abc.abstractmethod
-    def score(self, query, normalized=True, synonimizer=None):
+    def score(self, query, normalized=True, synonimizer=None, return_suffix_scores=False):
         """Computes the matching score for the given string against the AST."""
 
     def traverse(self, callback, order=consts.TraversalOrder.DEPTH_FIRST_PRE_ORDER):        

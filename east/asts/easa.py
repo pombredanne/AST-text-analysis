@@ -5,11 +5,13 @@ import numpy as np
 
 from east.asts import base
 from east.asts import utils
+from east import consts
 from east import utils as common_utils
+
 
 class EnhancedAnnotatedSuffixArray(base.AST):
 
-    __algorithm__ = "easa"
+    __algorithm__ = consts.ASTAlgorithm.EASA
 
     def __init__(self, strings_collection):
         super(EnhancedAnnotatedSuffixArray, self).__init__(strings_collection)
@@ -21,7 +23,7 @@ class EnhancedAnnotatedSuffixArray(base.AST):
         self.childtab_next_l_index = self._compute_childtab_next_l_index(self.lcptab)
         self.anntab = self._compute_anntab(self.suftab, self.lcptab)
 
-    def score(self, query, normalized=True, synonimizer=None):
+    def score(self, query, normalized=True, synonimizer=None, return_suffix_scores=False):
         if synonimizer:
             synonyms = synonimizer.get_synonyms()
             query_words = common_utils.tokenize(query)
@@ -31,7 +33,7 @@ class EnhancedAnnotatedSuffixArray(base.AST):
                                    itertools.product(*query_words))
             return max(self._score(q) for q in possible_queries)
         else:
-            return self._score(query.replace(" ", ""), normalized)
+            return self._score(query.replace(" ", ""), normalized, return_suffix_scores)
 
     def traverse_depth_first_pre_order(self, callback):
         """Visits the internal "nodes" of the enhanced suffix array in depth-first pre-order.
@@ -86,9 +88,9 @@ class EnhancedAnnotatedSuffixArray(base.AST):
         """Visits the internal "nodes" of the enhanced suffix array in breadth-first order."""
         raise NotImplementedError
 
-    def _score(self, query, normalized=True):
-        query = query.upper()
+    def _score(self, query, normalized=True, return_suffix_scores=False):
         result = 0
+        suffix_scores = {}
         n = len(self.suftab)
 
         root_interval = (0, 0, n - 1)
@@ -97,6 +99,7 @@ class EnhancedAnnotatedSuffixArray(base.AST):
             
             suffix = query[suffix_start:]
             suffix_score = 0
+            suffix_result = 0
             matched_chars = 0
             nodes_matched = 0
             
@@ -121,13 +124,18 @@ class EnhancedAnnotatedSuffixArray(base.AST):
                     break
 
             if matched_chars:
+                suffix_result = (suffix_score + matched_chars - nodes_matched)
                 if normalized:
-                    suffix_result = (suffix_score + matched_chars - nodes_matched) / matched_chars
-                else:
-                    suffix_result = (suffix_score + matched_chars - nodes_matched)
+                    suffix_result /= matched_chars
                 result += suffix_result
+
+            suffix_scores[query[suffix_start:]] = suffix_result
             
         result /= len(query)
+
+        if return_suffix_scores:
+            result = result, suffix_scores
+
         return result
 
     def _compute_suftab(self, string):

@@ -3,10 +3,13 @@
 import itertools
 import sys
 
-from east.asts import base
+from east import consts
+from east import logging
+from east import relevance
 from east import utils
 
-def keyphrases_table(keyphrases, texts, ast_algorithm="easa", normalized=True, synonimizer=None):
+def keyphrases_table(keyphrases, texts, similarity_measure=None, synonimizer=None,
+                     language=consts.Language.ENGLISH):
     """
     Constructs the keyphrases table, containing their matching scores in a set of texts.
 
@@ -15,83 +18,132 @@ def keyphrases_table(keyphrases, texts, ast_algorithm="easa", normalized=True, s
     to the matching score (0 <= score <= 1) of keyphrase "keyphrase"
     in the text named "text".
     
-    :param keyphrases: list of unicode strings
+    :param keyphrases: list of strings
     :param texts: dictionary of form {text_name: text}
-    :param ast_algorithm: AST implementation to use
-    :param normalized: whether the scores should be normalized
+    :param similarity_measure: similarity measure to use
     :param synonimizer: SynonymExtractor object to be used
+    :param language: Language of the text collection / keyphrases
 
     :returns: dictionary of dictionaries, having keyphrases on its first level and texts
-              on the second level.  
+              on the second level.
     """
 
-    i = 0
-    total_texts = len(texts)
-    asts = {}
-    for text in texts:
-        i += 1
-        sys.stdout.write("\rConstructing ASTs: %i/%i" % (i, total_texts))
-        sys.stdout.flush()
-        asts[text] = base.AST.get_ast(ast_algorithm, utils.text_to_strings_collection(texts[text]))
+    similarity_measure = similarity_measure or relevance.ASTRelevanceMeasure()
+
+    text_titles = texts.keys()
+    text_collection = texts.values()
+    similarity_measure.set_text_collection(text_collection, language)
 
     i = 0
+    keyphrases_prepared = {keyphrase: utils.prepare_text(keyphrase)
+                           for keyphrase in keyphrases}
     total_keyphrases = len(keyphrases)
-    total_scores = total_texts * total_keyphrases
+    total_scores = len(text_collection) * total_keyphrases
     res = {}
     for keyphrase in keyphrases:
+        if not keyphrase:
+            continue
         res[keyphrase] = {}
-        for text in texts:
+        for j in xrange(len(text_collection)):
             i += 1
-            sys.stdout.write("\rCalculating matching scores: %i/%i" % (i, total_scores))
-            sys.stdout.flush()
-            res[keyphrase][text] = asts[text].score(keyphrase, normalized=normalized,
-                                                    synonimizer=synonimizer)
+            logging.progress("Calculating matching scores", i, total_scores)
+            res[keyphrase][text_titles[j]] = similarity_measure.relevance(
+                                                        keyphrases_prepared[keyphrase],
+                                                        text=j, synonimizer=synonimizer)
 
-    sys.stdout.write("\r" + " " * 80 + "\r")
-    sys.stdout.flush()
+    logging.clear()
 
     return res
 
 
-def keyphrases_graph(keyphrases, texts, significance_level=0.6, score_treshold=0.25,
-                     ast_algorithm="easa", normalized=True, synonimizer=None):
+def keyphrases_graph(keyphrases, texts, referral_confidence=0.6, relevance_threshold=0.25,
+                     support_threshold=1, similarity_measure=None, synonimizer=None,
+                     language=consts.Language.ENGLISH):
     """
     Constructs the keyphrases relation graph based on the given texts corpus.
 
     The graph construction algorithm is based on the analysis of co-occurrences of key phrases
     in the text corpus. A key phrase is considered to imply another one if that second phrase
     occurs frequently enough in the same texts as the first one (that frequency is controlled
-    by the significance_level). A keyphrase counts as occuring in a text if its matching score
+    by the referral_confidence). A keyphrase counts as occuring in a text if its matching score
     for that text ecxeeds some threshold (Mirkin, Chernyak, & Chugunova, 2012).
 
     :param keyphrases: list of unicode strings
     :param texts: dictionary of form {text_name: text}
-    :param significance_level: significance level of the graph in [0; 1], 0.6 by default
-    :param score_treshold: threshold for the matching score in [0; 1] where a keyphrase starts
-                           to be considered as occuring in the corresponding text, 0.25 by default
+    :param referral_confidence: significance level of the graph in [0; 1], 0.6 by default
+    :param relevance_threshold: threshold for the matching score in [0; 1] where a keyphrase starts
+                                to be considered as occuring in the corresponding text;
+                                the defaul value is 0.25
+    :param support_threshold: threshold for the support of a node (the number of documents
+                              containing the corresponding keyphrase) such that it can be included
+                              into the graph
+    :param similarity_measure: Similarity measure to use
     :param synonimizer: SynonymExtractor object to be used
+    :param language: Language of the text collection / keyphrases
 
-    :returns: graph in a dictionary format: dictionary keys are node labels, while each key points
-              to a list of adjacent node labels ({"A": ["B", "C"], "B": ["A"], "C": []})
+    :returns: graph dictionary in a the following format:
+                {
+                    "nodes": [
+                        {
+                            "id": <id>,
+                            "label": "keyphrase",
+                            "support": <# of documents containing the keyphrase>
+                        },
+                        ...
+                    ]
+                    "edges": [
+                        {
+                            "source": "node_id",
+                            "target": "node_id",
+                            "confidence": <confidence_level>
+                        },
+                        ...
+                    ]
+                }
     """
 
+    similarity_measure = similarity_measure or relevance.ASTRelevanceMeasure()
+
     # Keyphrases table
-    table = keyphrases_table(keyphrases, texts, ast_algorithm, normalized, synonimizer)
+    table = keyphrases_table(keyphrases, texts, similarity_measure, synonimizer, language)
     
     # Dictionary { "keyphrase" => set(names of texts containing "keyphrase") }
     keyphrase_texts = {keyphrase: set([text for text in texts
-                                       if table[keyphrase][text] >= score_treshold])
+                                       if table[keyphrase][text] >= relevance_threshold])
                        for keyphrase in keyphrases}
-    
+
     # Initializing the graph object with nodes
-    graph = {k: [] for k in keyphrases}
+    graph = {
+        "nodes": [
+            {
+                "id": i,
+                "label": keyphrase,
+                "support": len(keyphrase_texts[keyphrase])
+            } for i, keyphrase in enumerate(keyphrases)
+        ],
+        "edges": [],
+        "referral_confidence": referral_confidence,
+        "relevance_threshold": relevance_threshold,
+        "support_threshold": support_threshold
+    }
+
+    # Removing nodes with small support after we've numbered all nodes
+    graph["nodes"] = [n for n in graph["nodes"]
+                      if len(keyphrase_texts[n["label"]]) >= support_threshold]
     
-    # Creating arcs
+    # Creating edges
     # NOTE(msdubov): permutations(), unlike combinations(), treats (1,2) and (2,1) as different
-    for (k1, k2) in itertools.permutations(keyphrases, 2):
-        if (len(keyphrase_texts[k1]) > 0 and 
-            float(len(keyphrase_texts[k1] & keyphrase_texts[k2])) /
-            len(keyphrase_texts[k1]) >= significance_level):
-            graph[k1].append(k2)
+    for i1, i2 in itertools.permutations(range(len(graph["nodes"])), 2):
+        node1 = graph["nodes"][i1]
+        node2 = graph["nodes"][i2]
+        confidence = (float(len(keyphrase_texts[node1["label"]] &
+                                keyphrase_texts[node2["label"]])) /
+                      max(len(keyphrase_texts[node1["label"]]), 1))
+        if confidence >= referral_confidence:
+            graph["edges"].append({
+                "source": node1["id"],
+                "target": node2["id"],
+                "confidence": confidence
+            })
             
     return graph

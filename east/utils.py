@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*
 
+import itertools
 import os
 import random
 import re
 import sys
+
+from nltk.corpus import stopwords as nltk_stopwords
 
 
 class ImmutableMixin(object):
@@ -35,8 +38,16 @@ def tokenize(text):
     return re.findall(re.compile("[\w']+", re.U), text)
 
 
+def tokenize_and_filter(text, min_word_length=3, stopwords=None):
+    tokens = tokenize(text)
+    # TODO(mikhaildubov): Add language detection
+    stopwords = stopwords or set(word.upper() for word in nltk_stopwords.words("english"))
+    return [token for token in tokens
+            if len(token) >= min_word_length and token not in stopwords]
+
+
 def text_to_strings_collection(text, words=3):
-    '''
+    """
     Splits the text to a collection of strings;
     a GAST for such a split collection usually produces
     better results in keyword matching that a GAST
@@ -45,7 +56,7 @@ def text_to_strings_collection(text, words=3):
     consist of (3 by default)
     
     return: Unicode
-    '''
+    """
     
     text = prepare_text(text)
     strings_collection = tokenize(text)
@@ -68,9 +79,22 @@ def text_to_strings_collection(text, words=3):
     return strings_collection_grouped
 
 
+def text_collection_to_string_collection(text_collection, words=3):
+    return flatten([text_to_strings_collection(text) for text in text_collection])
+
+
 def random_string(length):
-    string = u"".join([unichr(ord("A") + random.randint(0, 25)) for _ in xrange(length - 2)])
+    string = "".join([unichr(ord("A") + random.randint(0, 25)) for _ in xrange(length - 2)])
     return string
+
+
+def flatten(lst):
+    # NOTE(mikhaildubov): This is the fastest implementation according to bit.ly/so_flat_list
+    return list(itertools.chain.from_iterable(lst))
+
+
+def output_is_redirected():
+    return os.fstat(0) != os.fstat(1)
 
 
 def itersubclasses(cls, _seen=None):
